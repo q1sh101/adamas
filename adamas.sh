@@ -6,6 +6,7 @@ _dir="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 
 source "${_dir}/lib/common.sh"
 source "${_dir}/lib/run.sh"
+source "${_dir}/lib/install.sh"
 
 # --- config ---
 _defaults() {
@@ -83,6 +84,12 @@ case "$cmd" in
     logger -t adamas "run $_conf_name ($APP_ID)" 2>/dev/null || true
     adamas_run "${@:3}"
     ;;
+  install)
+    [[ -n "${2:-}" ]] || die "usage: adamas install <app>"
+    _load_conf "$2"
+    logger -t adamas "install $_conf_name ($APP_ID)" 2>/dev/null || true
+    adamas_install
+    ;;
   list)
     found=0
     for f in "${_dir}/apps"/*.conf; do
@@ -96,6 +103,7 @@ case "$cmd" in
   *)
     log "usage: adamas <command> <app>"
     log "  run     <app>     launch with stateless sandbox (--sandbox + env -i)"
+    log "  install <app>     install from Flathub"
     log "  list              show available app configs"
     exit 1
     ;;
