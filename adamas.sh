@@ -8,6 +8,7 @@ source "${_dir}/lib/common.sh"
 source "${_dir}/lib/run.sh"
 source "${_dir}/lib/install.sh"
 source "${_dir}/lib/harden.sh"
+source "${_dir}/lib/verify.sh"
 
 # --- config ---
 _defaults() {
@@ -97,6 +98,12 @@ case "$cmd" in
     logger -t adamas "harden $_conf_name ($APP_ID)" 2>/dev/null || true
     adamas_harden
     ;;
+  verify)
+    [[ -n "${2:-}" ]] || die "usage: adamas verify <app>"
+    _load_conf "$2"
+    logger -t adamas "verify $_conf_name ($APP_ID)" 2>/dev/null || true
+    adamas_verify
+    ;;
   list)
     found=0
     for f in "${_dir}/apps"/*.conf; do
@@ -112,6 +119,7 @@ case "$cmd" in
     log "  run     <app>     launch with stateless sandbox (--sandbox + env -i)"
     log "  install <app>     install from Flathub"
     log "  harden  <app>     patch .desktop to route through adamas run"
+    log "  verify  <app>     audit .desktop route integrity"
     log "  list              show available app configs"
     exit 1
     ;;
