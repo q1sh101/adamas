@@ -10,6 +10,7 @@ source "${_dir}/lib/install.sh"
 source "${_dir}/lib/harden.sh"
 source "${_dir}/lib/verify.sh"
 source "${_dir}/lib/auto.sh"
+source "${_dir}/lib/watch.sh"
 
 # --- config ---
 _defaults() {
@@ -108,6 +109,14 @@ case "$cmd" in
   auto)
     adamas_auto
     ;;
+  watch)
+    case "${2:-}" in
+      install) adamas_watch_install ;;
+      remove)  adamas_watch_remove ;;
+      status)  adamas_watch_status ;;
+      *)       die "usage: adamas watch <install|remove|status>" ;;
+    esac
+    ;;
   list)
     found=0
     for f in "${_dir}/apps"/*.conf; do
@@ -125,6 +134,9 @@ case "$cmd" in
     log "  harden  <app>     patch .desktop to route through adamas run"
     log "  verify  <app>     audit .desktop route integrity"
     log "  auto              scan + harden all flatpak apps"
+    log "  watch   install   enable systemd auto-hardening"
+    log "  watch   remove    disable systemd auto-hardening"
+    log "  watch   status    show watcher status"
     log "  list              show available app configs"
     exit 1
     ;;
