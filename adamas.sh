@@ -9,6 +9,7 @@ source "${_dir}/lib/run.sh"
 source "${_dir}/lib/install.sh"
 source "${_dir}/lib/harden.sh"
 source "${_dir}/lib/verify.sh"
+source "${_dir}/lib/auto.sh"
 
 # --- config ---
 _defaults() {
@@ -104,6 +105,9 @@ case "$cmd" in
     logger -t adamas "verify $_conf_name ($APP_ID)" 2>/dev/null || true
     adamas_verify
     ;;
+  auto)
+    adamas_auto
+    ;;
   list)
     found=0
     for f in "${_dir}/apps"/*.conf; do
@@ -120,6 +124,7 @@ case "$cmd" in
     log "  install <app>     install from Flathub"
     log "  harden  <app>     patch .desktop to route through adamas run"
     log "  verify  <app>     audit .desktop route integrity"
+    log "  auto              scan + harden all flatpak apps"
     log "  list              show available app configs"
     exit 1
     ;;
