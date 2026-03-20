@@ -11,6 +11,7 @@ source "${_dir}/lib/harden.sh"
 source "${_dir}/lib/verify.sh"
 source "${_dir}/lib/auto.sh"
 source "${_dir}/lib/watch.sh"
+source "${_dir}/lib/trace.sh"
 
 # --- config ---
 _defaults() {
@@ -117,6 +118,10 @@ case "$cmd" in
       *)       die "usage: adamas watch <install|remove|status>" ;;
     esac
     ;;
+  trace)
+    [[ -n "${2:-}" ]] || die "usage: adamas trace <app-id> [--save]"
+    adamas_trace "$2" "${@:3}"
+    ;;
   list)
     found=0
     for f in "${_dir}/apps"/*.conf; do
@@ -137,6 +142,7 @@ case "$cmd" in
     log "  watch   install   enable systemd auto-hardening"
     log "  watch   remove    disable systemd auto-hardening"
     log "  watch   status    show watcher status"
+    log "  trace   <app-id>  observe app needs, generate draft .conf"
     log "  list              show available app configs"
     exit 1
     ;;
