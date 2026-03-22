@@ -119,7 +119,7 @@ case "$cmd" in
     esac
     ;;
   trace)
-    [[ -n "${2:-}" ]] || die "usage: adamas trace <app-id> [--save]"
+    [[ -n "${2:-}" ]] || die "usage: adamas trace <app-id> [--runtime] [--save]"
     adamas_trace "$2" "${@:3}"
     ;;
   list)
