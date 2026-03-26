@@ -2,13 +2,28 @@
 # lib/auto.sh - auto-harden all flatpak apps
 # shellcheck disable=SC2154  # _dir provided by adamas.sh
 
+# --- read minimal config fields after safety checks ---
+_conf_var() {
+  local conf="$1" name="$2"
+  (
+    _check_conf_safe "$conf"
+    set +eu
+    # shellcheck disable=SC2034  # values are read indirectly after sourcing
+    APP_ID='' HOOK_NAME=''
+    # shellcheck disable=SC1090
+    source "$conf" 2>/dev/null
+    printf '%s' "${!name:-}"
+  )
+}
+
 # --- check if app is already hardened (desktop patch or hook) ---
 _is_hardened() {
   local conf_name="$1" app_id="$2" escaped_dir="$3"
+  local conf="${_dir}/apps/${conf_name}.conf"
 
   # check launcher hook (webapp path)
   local hook_name
-  hook_name="$(set +eu; HOOK_NAME=''; source "${_dir}/apps/${conf_name}.conf" 2>/dev/null; printf '%s' "$HOOK_NAME")"
+  hook_name="$(_conf_var "$conf" HOOK_NAME)"
   if [[ -n "$hook_name" ]]; then
     local hook
     hook="$(_hook_dir)/${hook_name}"
@@ -45,7 +60,7 @@ adamas_auto() {
     for conf in "${_dir}/apps"/*.conf; do
       [[ -f "$conf" ]] || continue
       [[ "$(basename "$conf")" == "example.conf" ]] && continue
-      check_id="$(set +eu; APP_ID=''; source "$conf" 2>/dev/null; printf '%s' "$APP_ID")"
+      check_id="$(_conf_var "$conf" APP_ID)"
       if [[ "$check_id" == "$app_id" ]]; then
         found=true
         app_name="$(basename "${conf%.conf}")"
