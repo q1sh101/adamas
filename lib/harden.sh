@@ -5,11 +5,9 @@
 # --- install launcher hook (for webapps routed through an external launcher) ---
 _install_hook() {
   local hook_name="$1"
-  local hook_dir
-  hook_dir="$(_hook_dir)"
-  local hook="${hook_dir}/${hook_name}"
+  local hook="${HOOK_DIR}/${hook_name}"
 
-  mkdir -p "$hook_dir" || die "cannot create $hook_dir"
+  mkdir -p "$HOOK_DIR" || die "cannot create $HOOK_DIR"
 
   cat > "$hook" <<HOOK
 #!/bin/sh

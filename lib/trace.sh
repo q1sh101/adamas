@@ -255,7 +255,13 @@ _render_conf() {
 
   if [[ ${#_T_DBUS_CALL[@]} -gt 0 ]]; then
     printf '\n# --- D-Bus call filtering (runtime observed) ---\n'
-    printf 'ALLOW_DBUS_CALL=%s\n' "$(_fmt_arr_quoted _T_DBUS_CALL)"
+    if _has_dbus_call; then
+      printf 'ALLOW_DBUS_CALL=%s\n' "$(_fmt_arr_quoted _T_DBUS_CALL)"
+    else
+      printf '# this flatpak has no --dbus-call; NEED_PORTAL=true gives coarse portal access\n'
+      printf '# ALLOW_DBUS_CALL=%s\n' "$(_fmt_arr _T_DBUS_CALL)"
+      printf 'NEED_PORTAL=true\n'
+    fi
   fi
 }
 
@@ -267,11 +273,11 @@ _output_conf() {
     name="${app_id##*.}"
     name="${name,,}"
     local conf="${_dir}/apps/${name}.conf"
-    if [[ -f "$conf" ]]; then
+    if _conf_path "$name"; then
       name="${app_id//./-}"
       conf="${_dir}/apps/${name}.conf"
     fi
-    [[ -f "$conf" ]] && die "config already exists: $conf"
+    _conf_path "$name" && die "config already exists: $_CONF_PATH"
     _render_conf "$app_id" > "$conf"
     ok "draft written: $conf"
   else
@@ -299,7 +305,7 @@ _trace_runtime() {
 
   # start dbus-monitor (background)
   local dbus_log
-  dbus_log="$(mktemp /tmp/adamas-trace-XXXXXX)"
+  dbus_log="$(mktemp "${XDG_RUNTIME_DIR:-/tmp}/adamas-trace-XXXXXX")"
   dbus-monitor --session \
     "type='method_call',destination='org.freedesktop.portal.Desktop'" \
     "type='method_call',destination='org.freedesktop.portal.Documents'" \
@@ -316,8 +322,8 @@ _trace_runtime() {
   local app_pid=$!
 
   # wait for proxy to appear (retry up to 5 times)
-  local proxy_pids_after app_sender="" new_proxy="" attempt
-  for attempt in 1 2 3 4 5; do
+  local proxy_pids_after app_sender="" new_proxy=""
+  for _ in 1 2 3 4 5; do
     sleep 2
     proxy_pids_after="$(pgrep xdg-dbus-proxy 2>/dev/null | sort)" || true
     new_proxy="$(comm -13 <(echo "$proxy_pids_before") <(echo "$proxy_pids_after") | head -1)" || true

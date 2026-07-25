@@ -18,6 +18,7 @@ _defaults() {
   APP_ID=""
   APP_ARGS=()
   HOOK_NAME=""
+  HOOK_DIR=""     # external launcher hook directory (required with HOOK_NAME)
   ALLOW_DBUS_CALL=()
   ALLOW_SHARE=()
   ALLOW_SOCKET=()
@@ -36,6 +37,9 @@ _defaults() {
   ALLOW_ENV=()
   DENY_PORTAL=()    # populated by baseline merge, not by config files
   ALLOW_PORTAL=()
+  NEED_PORTAL=false # true = run the filtered session bus proxy (portals reachable)
+  # shellcheck disable=SC2034  # read via _conf_var in auto.sh and indirectly in _validate
+  AUTO_SKIP=false   # true = adamas auto leaves this app alone
 }
 
 _load_conf() {
@@ -43,12 +47,14 @@ _load_conf() {
   case "$app" in
     ''|*[!a-zA-Z0-9._-]*) die "invalid app name: $app" ;;
   esac
-  local conf="${_dir}/apps/${app}.conf"
-  [[ -f "$conf" ]] || die "no config: $conf"
+  local conf
+  _conf_path "$app" || die "no config: ${_dir}/apps/${app}.conf"
+  conf="$_CONF_PATH"
 
   _conf_name="$app"
   _defaults
   _check_conf_safe "$conf"
+  # shellcheck source=/dev/null
   source "$conf"
 
   [[ -n "$APP_ID" ]] || die "APP_ID not set in $conf"
@@ -123,14 +129,13 @@ case "$cmd" in
     adamas_trace "$2" "${@:3}"
     ;;
   list)
-    found=0
-    for f in "${_dir}/apps"/*.conf; do
-      [[ -f "$f" ]] || continue
+    count=0
+    while IFS= read -r f; do
       [[ "$(basename "$f")" == "example.conf" ]] && continue
       log "  $(basename "${f%.conf}")"
-      ((found++)) || true
-    done
-    (( found > 0 )) || warn "no app configs in $_dir/apps"
+      ((count++)) || true
+    done < <(_list_confs)
+    (( count > 0 )) || warn "no app configs in $_dir/apps"
     ;;
   *)
     log "usage: adamas <command> <app>"

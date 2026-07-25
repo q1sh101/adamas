@@ -11,14 +11,21 @@ adamas_verify() {
 
   local fails=0
 
+  if [[ "${AUTO_SKIP}" == "true" ]]; then
+    ok "${_conf_name}: route not managed by adamas (AUTO_SKIP=true)"
+    return 0
+  fi
+
   if [[ -n "${HOOK_NAME:-}" ]]; then
     # webapp: check launcher hook
     local hook
-    hook="$(_hook_dir)/${HOOK_NAME}"
+    hook="${HOOK_DIR}/${HOOK_NAME}"
+    local hook_escaped_dir
+    hook_escaped_dir="$(_bre_escape "$_dir")"
     if [[ ! -x "$hook" ]]; then
       warn "DRIFT: launcher hook missing or not executable: $hook"
       ((fails++)) || true
-    elif ! grep -q "adamas\\.sh.*run.*${_conf_name}" "$hook" 2>/dev/null; then
+    elif ! grep -q "\"${hook_escaped_dir}/adamas\\.sh\" run \"${_conf_name}\"" "$hook" 2>/dev/null; then
       warn "DRIFT: hook does not route to adamas run ${_conf_name}"
       ((fails++)) || true
     fi

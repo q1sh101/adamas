@@ -51,6 +51,11 @@ _require_safe_flatpak() {
 
 _is_installed() { flatpak info "$1" &>/dev/null; }
 
+# --dbus-call is not upstream; requires the patched fork
+_has_dbus_call() {
+  flatpak run --help 2>/dev/null | grep -q -- '--dbus-call'
+}
+
 # --- paths ---
 _desktop_dir() {
   echo "${XDG_DATA_HOME:-${HOME}/.local/share}/applications"
@@ -58,16 +63,44 @@ _desktop_dir() {
 
 _unit_dir() { echo "${XDG_CONFIG_HOME:-${HOME}/.config}/systemd/user"; }
 
-_hook_dir() { echo "${XDG_CONFIG_HOME:-${HOME}/.config}/hifox/hooks/webapp"; }
-
 # all flatpak .desktop export dirs (user + system + custom installations)
 _list_export_dirs() {
-  echo "${XDG_DATA_HOME:-${HOME}/.local/share}/flatpak/exports/share/applications"
+  echo "${FLATPAK_USER_DIR:-${XDG_DATA_HOME:-${HOME}/.local/share}/flatpak}/exports/share/applications"
   local dir
   while IFS= read -r dir; do
     [[ -n "$dir" ]] || continue
     echo "${dir}/exports/share/applications"
   done < <(flatpak --installations 2>/dev/null)
+}
+
+# --- config lookup ---
+# shellcheck disable=SC2154  # _dir provided by adamas.sh
+
+# apps/*.conf and apps/*/*.conf - one level deep, no symlinked dirs
+_list_confs() {
+  local f d
+  for f in "${_dir}/apps"/*.conf "${_dir}/apps"/*/*.conf; do
+    [[ -f "$f" && ! -L "$f" ]] || continue
+    d="$(dirname "$f")"
+    [[ ! -L "$d" ]] || continue
+    printf '%s\n' "$f"
+  done | LC_ALL=C sort
+}
+
+# resolve a config name to exactly one path in _CONF_PATH
+# not a subshell helper: a duplicate must kill the caller, not just $( )
+_conf_path() {
+  local name="$1" f
+  local -a found=()
+  while IFS= read -r f; do
+    [[ "$(basename "$f")" == "${name}.conf" ]] && found+=("$f")
+  done < <(_list_confs)
+
+  case ${#found[@]} in
+    0) _CONF_PATH=""; return 1 ;;
+    1) _CONF_PATH="${found[0]}" ;;
+    *) die "duplicate config basename ${name}.conf: ${found[*]}" ;;
+  esac
 }
 
 # --- regex ---
@@ -134,7 +167,13 @@ _validate() {
     "reverse-DNS (org.example.App)"
 
   _validate_enum ALLOW_SHARE   "network;ipc"
-  _validate_enum ALLOW_SOCKET  "x11;wayland;fallback-x11;pulseaudio;session-bus;system-bus;ssh-auth;pcsc;cups;gpg-agent;inherit-wayland-socket"
+  # session-bus/system-bus hand the app an unfiltered bus - that is a sandbox escape
+  local _sock
+  for _sock in ${ALLOW_SOCKET[@]+"${ALLOW_SOCKET[@]}"}; do
+    [[ "$_sock" != "session-bus" && "$_sock" != "system-bus" ]] \
+      || die "ALLOW_SOCKET: '$_sock' grants unfiltered bus access (sandbox escape) - use NEED_PORTAL=true"
+  done
+  _validate_enum ALLOW_SOCKET  "x11;wayland;fallback-x11;pulseaudio;ssh-auth;pcsc;cups;gpg-agent;inherit-wayland-socket"
   _validate_enum ALLOW_DEVICE  "dri;input;usb;kvm;shm;all"
   _validate_enum ALLOW_FEATURE "devel;multiarch;bluetooth;canbus;per-app-dev-shm"
 
@@ -192,4 +231,17 @@ _validate() {
   # hook name: alphanumeric only (no path traversal)
   [[ -z "${HOOK_NAME:-}" ]] || [[ "$HOOK_NAME" =~ ^[a-zA-Z0-9_-]+$ ]] \
     || die "invalid HOOK_NAME: $HOOK_NAME"
+
+  # HOOK_DIR names the external launcher's hook directory - adamas has no default
+  if [[ -n "${HOOK_NAME:-}" ]]; then
+    [[ -n "${HOOK_DIR:-}" ]] || die "HOOK_NAME requires HOOK_DIR (launcher hook directory)"
+    [[ "$HOOK_DIR" == /* && "$HOOK_DIR" != *..* ]] \
+      || die "invalid HOOK_DIR: $HOOK_DIR (absolute path, no ..)"
+  fi
+
+  local _flag
+  for _flag in NEED_PORTAL AUTO_SKIP; do
+    [[ "${!_flag}" == "true" || "${!_flag}" == "false" ]] \
+      || die "$_flag must be true or false (got: ${!_flag})"
+  done
 }
