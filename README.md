@@ -27,7 +27,7 @@ bash adamas.sh verify myapp    # audit the route
 
 > **`ALLOW_SOCKET=(session-bus)` is rejected.** An unfiltered bus lets the app call `org.freedesktop.Flatpak` and run commands on the host - that is a sandbox escape, not a portal mode.
 
-> **One `APP_ID`, one portal policy.** Several configs may point at the same app (separate browser profiles, for example). Flatpak keys portal permissions by application id, so "camera for this webapp only" cannot be expressed. adamas refuses to start a config whose portal policy differs from a running instance of the same app id, instead of silently widening the grant - see below.
+> **One `APP_ID`, one portal policy.** Several configs may point at the same app (separate browser profiles, for example). Flatpak keys portal permissions by application id, so "camera for this webapp only" cannot be expressed. adamas refuses to start a config whose portal policy differs from a running instance of the same app id, instead of silently widening the grant. `SHARE_PORTAL=true` on every sibling trades that refusal for concurrency under one shared ceiling - sound only when the app confines its own profiles - see below.
 
 ## what it does
 
@@ -68,6 +68,7 @@ ALLOW_FILESYSTEM                              paths the app may see
 ALLOW_DBUS_TALK / ALLOW_DBUS_OWN              session bus names
 NEED_PORTAL                                   run the session bus proxy
 ALLOW_PORTAL / DENY_PORTAL                    portal permission store entries
+SHARE_PORTAL                                  share one ceiling across an app id
 ALLOW_DBUS_CALL                               method-level filtering (patched flatpak)
 PERSIST                                       paths that survive exit
 SET_ENV / ALLOW_ENV                           environment

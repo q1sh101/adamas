@@ -68,7 +68,7 @@ What happens inside `adamas run <app>`:
   │                                                                   │
   │   ┌───────────────────────────────────────────────────────────┐   │
   │   │  1. flatpak permission-reset $APP_ID                      │   │
-  │   │     wipe all portal grants (skipped if sibling alive)     │   │
+  │   │     wipe every grant - on every launch, sibling or not    │   │
   │   │     failure is fatal - no launch with unknown grants      │   │
   │   └────────────────────────────┬──────────────────────────────┘   │
   │                                │                                  │
@@ -83,7 +83,7 @@ What happens inside `adamas run <app>`:
   │   ┌───────────────────────────────────────────────────────────┐   │
   │   │  3. .conf --> flags                                       │   │
   │   │     ALLOW_* arrays compile to --share= --socket= etc.     │   │
-  │   │     ALLOW_PORTAL entries get permission-set yes           │   │
+  │   │     the union's ALLOW_PORTAL gets permission-set yes      │   │
   │   └────────────────────────────┬──────────────────────────────┘   │
   │                                │                                  │
   │                                ▼                                  │
@@ -103,7 +103,7 @@ What happens inside `adamas run <app>`:
   │   │  env -i flatpak run --sandbox ... $APP_ID                 │   │
   │   └───────────────────────────────────────────────────────────┘   │
   │                                                                   │
-  │   on exit: permission-reset $APP_ID (only if last instance)       │
+  │   on exit: recompute the union, permission-reset if last out      │
   │                                                                   │
   └───────────────────────────────────────────────────────────────────┘
 ```
@@ -119,9 +119,9 @@ What happens inside `adamas run <app>`:
 ```
 
 Steps 1-3 run under a per-`APP_ID` lock, so a second launch of the same app
-waits until the policy is fully written before its own process starts. If
-another instance is already alive the reset is skipped and its policy stays in
-effect.
+waits until the policy is fully written before its own process starts. With a
+sibling alive the store is rewritten to the union of both, or the launch is
+refused - see [portal access](#portal-access).
 
 ## portal access
 
@@ -160,32 +160,52 @@ a bus first - `NEED_PORTAL=true` opens it, and `ALLOW_DBUS_CALL` implies it.
 
 ### one app id, one policy
 
-The permission store is keyed by application id. Layer 3 therefore has no notion
-of a profile, an instance or a sandbox: a grant written for one config is live
-for every process running under that id, and `FLATPAK_INSTANCE_ID` is
-bookkeeping, not policy identity. Two webapp profiles of the same browser cannot
-hold different camera answers at the same time.
-
-adamas does not paper over this. `lib/run.sh` keeps one state file per app id in
-`$XDG_RUNTIME_DIR`, holds a `flock` while it decides, and compares the running
-instances' portal signature with the one being launched:
+The permission store is keyed by application id, so layer 3 has no notion of a
+profile, an instance or a sandbox: a grant written for one config is live for
+every process under that id. `lib/run.sh` therefore keeps one state file per app
+id and decides under a `flock`.
 
 ```text
-  first instance      reset the store, write DENY_PORTAL, then ALLOW_PORTAL
-  same signature      join it, no rewrite
-  different signature die - "close it first or give this config its own APP_ID"
-  last instance exits permission-reset
+  ┌───────────────────────────────────────────────────────────────────┐
+  │                       One APP_ID, One Policy                      │
+  ├───────────────────────────────────────────────────────────────────┤
+  │                                                                   │
+  │   state    $XDG_RUNTIME_DIR/adamas-<APP_ID>.pids                  │
+  │            <pid>  <config>  <shared>  <portal signature>          │
+  │                                                                   │
+  │   launch   flock, prune dead pids, compare signatures             │
+  │              same                 join, the union is unchanged    │
+  │              differs              die, unless both sides share    │
+  │              differs, both share  widen to the union              │
+  │                                                                   │
+  │   write    reset  ->  DENY the rest  ->  ALLOW the union          │
+  │   exit     recompute; permission-reset when the last one goes     │
+  │                                                                   │
+  │   ┌─────────────────┬────────┬────────────┬───────────────────┐   │
+  │   │     instance    │ camera │ screencast │     microphone    │   │
+  │   ├─────────────────┼────────┼────────────┼───────────────────┤   │
+  │   │ firefox-discord │  yes   │    yes     │         no        │   │
+  │   │ firefox-netflix │   no   │     no     │         no        │   │
+  │   ├─────────────────┼────────┼────────────┼───────────────────┤   │
+  │   │  store, both up │  yes   │    yes     │         no        │   │
+  │   │  discord exits  │   no   │     no     │         no        │   │
+  │   └─────────────────┴────────┴────────────┴───────────────────┘   │
+  │                                                                   │
+  └───────────────────────────────────────────────────────────────────┘
 ```
 
-The state file is removed with the last instance; its zero-byte `.lock`
-companion is left behind on purpose. Unlinking a lock file releases waiters onto
-an inode no longer at that path, so the next launch creates a fresh one and two
-processes hold what they both believe is the same lock. `$XDG_RUNTIME_DIR` is a
-tmpfs cleared at logout, which is the cheaper trade.
+A lone instance gets exactly its own policy - the union of one set is that set.
+The zero-byte `.lock` is left behind on purpose: unlinking a lock file releases
+waiters onto an inode no longer at that path, so the next launch would create a
+fresh one and two processes would hold what they both believe is the same lock.
+`$XDG_RUNTIME_DIR` is a tmpfs cleared at logout, which is the cheaper trade.
 
-Failing closed is the point. Widening the grant so both profiles start would
-hand the strict profile whatever the loose one asked for, which is the opposite
-of what the config says.
+Failing closed is the default, and `SHARE_PORTAL=true` trades that refusal for
+concurrency. The trade is real: while siblings run together layer 3 stops
+distinguishing them, so the strict profile sits inside the loose profile's
+grant. That is only sound when the application confines its own profiles, the
+way a browser can lock a pref per profile. adamas cannot verify that and does
+not claim to - the config asserts it. Without such a layer, leave the flag off.
 
 ### the fork path
 
@@ -199,8 +219,15 @@ branch `add-dbus-call-option`. It replaces flatpak's default
 layer out of the shared store and into the sandbox:
 
 ```text
-  vanilla   layer 3 decides   one store, one answer per app id
-  fork      layer 2 decides   one filter per sandbox, store is the outer bound
+  ┌───────────────────────────────────────────────────────────────────┐
+  │                   Where The Deciding Layer Lives                  │
+  ├───────────────────────────────────────────────────────────────────┤
+  │                                                                   │
+  │   vanilla   layer 3   one store, one answer per app id            │
+  │   fork      layer 2   one filter per sandbox, the store is        │
+  │                       only the outer bound                        │
+  │                                                                   │
+  └───────────────────────────────────────────────────────────────────┘
 ```
 
 Layer 3 does not disappear, so every profile of one app id keeps the same

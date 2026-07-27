@@ -5,7 +5,7 @@
 # --- shared portal state for one APP_ID ---
 # the permission store is keyed by APP_ID, so instances of the same app cannot
 # hold different portal policies at the same time.
-# state lines: "<pid><TAB><config><TAB><portal grants>"
+# state lines: "<pid><TAB><config><TAB><shared><TAB><portal grants>"
 _portal_state() { echo "${XDG_RUNTIME_DIR:-/tmp}/adamas-${APP_ID}.pids"; }
 
 _portal_sig() {
@@ -32,17 +32,50 @@ _portal_grants() {
 
 # drop dead pids, print the surviving lines
 _portal_prune() {
-  local pf pid conf sig live=""
+  local pf pid conf share sig live=""
   pf="$(_portal_state)"
-  while IFS=$'\t' read -r pid conf sig; do
+  while IFS=$'\t' read -r pid conf share sig; do
     [[ -n "$pid" ]] || continue
     kill -0 "$pid" 2>/dev/null || continue
-    live+="${pid}"$'\t'"${conf}"$'\t'"${sig}"$'\n'
+    live+="${pid}"$'\t'"${conf}"$'\t'"${share}"$'\t'"${sig}"$'\n'
     # redirections apply left to right - stderr must be silenced before the
     # input redirect, or the first run reports the missing state file
   done 2>/dev/null < "$pf"
   printf '%s' "$live" > "$pf"
   printf '%s' "$live"
+}
+
+# store policy for one app id: the union of every live instance's ALLOW_PORTAL,
+# everything else denied. with one instance that is its own policy.
+_portal_apply() {
+  local pf pid conf share sig token key seen="" yes=""
+  local -a tokens=() allow=() deny=()
+  pf="$(_portal_state)"
+  while IFS=$'\t' read -r pid conf share sig; do
+    [[ -n "$pid" ]] || continue
+    for token in $sig; do tokens+=("$token"); done
+  done 2>/dev/null < "$pf"
+
+  for token in ${tokens[@]+"${tokens[@]}"}; do
+    [[ "$token" == yes:* ]] && yes+=" ${token#yes:}"
+  done
+  for token in ${tokens[@]+"${tokens[@]}"}; do
+    key="${token#*:}"
+    [[ " $seen " == *" $key "* ]] && continue
+    seen+=" $key"
+    if [[ " $yes " == *" $key "* ]]; then allow+=("$key"); else deny+=("$key"); fi
+  done
+
+  flatpak permission-reset "$APP_ID" 2>/dev/null || return 1
+  local pe tbl id
+  for pe in ${deny[@]+"${deny[@]}"}; do
+    tbl="${pe%%:*}"; id="${pe#*:}"
+    flatpak permission-set "$tbl" "$id" "$APP_ID" no || return 1
+  done
+  for pe in ${allow[@]+"${allow[@]}"}; do
+    tbl="${pe%%:*}"; id="${pe#*:}"
+    flatpak permission-set "$tbl" "$id" "$APP_ID" yes || return 1
+  done
 }
 
 # _PORTAL_LOCK_FD is set while adamas_run holds the lock - re-locking the same
@@ -66,6 +99,8 @@ _portal_cleanup() {
     rm -f "$pf"
     flatpak permission-reset "$APP_ID" 2>/dev/null \
       || warn "permission-reset failed on exit - portal grants may be stale"
+  else
+    _portal_apply || warn "portal policy downgrade failed - grants may be stale"
   fi
   $held || flock -u "$fd"
 }
@@ -80,7 +115,7 @@ adamas_run() {
   fi
 
   # --- portal policy (one policy per APP_ID, fail closed on conflict) ---
-  local _pf _lock_fd _sig _live _pid _conf _psig _running _wanted
+  local _pf _lock_fd _sig _live _pid _conf _pshare _psig _running _wanted
   _pf="$(_portal_state)"
   _sig="$(_portal_sig)"
   # hold the lock until the policy is in place - a sibling must not start earlier
@@ -88,33 +123,22 @@ adamas_run() {
   flock "$_lock_fd"
   _live="$(_portal_prune)"
 
-  while IFS=$'\t' read -r _pid _conf _psig; do
+  # a shared ceiling needs both sides to have asked for it
+  while IFS=$'\t' read -r _pid _conf _pshare _psig; do
     [[ -n "$_pid" ]] || continue
     [[ "$_psig" == "$_sig" ]] && continue
+    [[ "$_pshare" == "true" && "$SHARE_PORTAL" == "true" ]] && continue
     _running="$(_portal_grants "$_psig")"
     _wanted="$(_portal_grants "$_sig")"
-    die "$APP_ID is running as '$_conf' with portal grants [${_running:-none}]; '$_conf_name' needs [${_wanted:-none}] - the permission store is shared per app id, so close it first or give this config its own APP_ID"
+    die "$APP_ID is running as '$_conf' with portal grants [${_running:-none}]; '$_conf_name' needs [${_wanted:-none}] - the permission store is shared per app id, so close it first, give this config its own APP_ID, or set SHARE_PORTAL=true on both"
   done <<< "$_live"
 
-  printf '%s\t%s\t%s\n' "$$" "$_conf_name" "$_sig" >> "$_pf"
+  printf '%s\t%s\t%s\t%s\n' "$$" "$_conf_name" "$SHARE_PORTAL" "$_sig" >> "$_pf"
   _PORTAL_LOCK_FD="$_lock_fd"
   trap '_portal_cleanup' EXIT
 
-  if [[ -z "$_live" ]]; then
-    flatpak permission-reset "$APP_ID" 2>/dev/null \
-      || die "permission-reset failed - refusing to launch with unknown portal grants"
-    local pe tbl id
-    for pe in ${DENY_PORTAL[@]+"${DENY_PORTAL[@]}"}; do
-      tbl="${pe%%:*}"; id="${pe#*:}"
-      flatpak permission-set "$tbl" "$id" "$APP_ID" no \
-        || die "permission-set (deny) failed: $tbl:$id"
-    done
-    for pe in ${ALLOW_PORTAL[@]+"${ALLOW_PORTAL[@]}"}; do
-      tbl="${pe%%:*}"; id="${pe#*:}"
-      flatpak permission-set "$tbl" "$id" "$APP_ID" yes \
-        || die "permission-set (allow) failed: $tbl:$id"
-    done
-  fi
+  _portal_apply \
+    || die "portal policy write failed - refusing to launch with unknown portal grants"
   flock -u "$_lock_fd"
   exec {_lock_fd}>&-
   unset _PORTAL_LOCK_FD

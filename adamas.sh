@@ -38,6 +38,8 @@ _defaults() {
   DENY_PORTAL=()    # populated by baseline merge, not by config files
   ALLOW_PORTAL=()
   NEED_PORTAL=false # true = run the filtered session bus proxy (portals reachable)
+  # shellcheck disable=SC2034  # read by adamas_run in run.sh
+  SHARE_PORTAL=false # true = accept a shared portal ceiling with sibling configs
   # shellcheck disable=SC2034  # read via _conf_var in auto.sh and indirectly in _validate
   AUTO_SKIP=false   # true = adamas auto leaves this app alone
 }

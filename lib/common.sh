@@ -240,7 +240,7 @@ _validate() {
   fi
 
   local _flag
-  for _flag in NEED_PORTAL AUTO_SKIP; do
+  for _flag in NEED_PORTAL SHARE_PORTAL AUTO_SKIP; do
     [[ "${!_flag}" == "true" || "${!_flag}" == "false" ]] \
       || die "$_flag must be true or false (got: ${!_flag})"
   done
