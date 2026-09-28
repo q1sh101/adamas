@@ -12,6 +12,9 @@ The manifest asks for everything. The config decides what it gets.
 ```bash
 git clone https://github.com/q1sh101/adamas && cd adamas
 
+# adamas refuses group/world-writable configs
+chmod -R go-w apps
+
 # copy the template, set APP_ID, name what the app needs
 cp apps/example.conf apps/myapp.conf
 
@@ -48,6 +51,12 @@ bash adamas.sh auto                                   scan installed apps, gener
 bash adamas.sh watch   install|remove|status          manage systemd automation
 bash adamas.sh trace   <app-id> [--runtime] [--save]  observe app needs, generate draft config
 bash adamas.sh list                                   show available configs
+```
+
+## development checks
+
+```bash
+bash tests/smoke.sh
 ```
 
 ## files

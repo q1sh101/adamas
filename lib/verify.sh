@@ -5,7 +5,7 @@
 # --- verify (desktop route or launcher hook integrity) ---
 adamas_verify() {
   _require_safe_flatpak
-  _is_installed "$APP_ID" || die "$APP_ID not installed"
+  _is_installed "${APP_ID}" || die "${APP_ID} not installed"
 
   log "verifying ${_conf_name}..."
 
@@ -21,11 +21,11 @@ adamas_verify() {
     local hook
     hook="${HOOK_DIR}/${HOOK_NAME}"
     local hook_escaped_dir
-    hook_escaped_dir="$(_bre_escape "$_dir")"
-    if [[ ! -x "$hook" ]]; then
-      warn "DRIFT: launcher hook missing or not executable: $hook"
+    hook_escaped_dir="$(_bre_escape "${_dir}")"
+    if [[ ! -x "${hook}" ]]; then
+      warn "DRIFT: launcher hook missing or not executable: ${hook}"
       ((fails++)) || true
-    elif ! grep -q "\"${hook_escaped_dir}/adamas\\.sh\" run \"${_conf_name}\"" "$hook" 2>/dev/null; then
+    elif ! grep -q "\"${hook_escaped_dir}/adamas\\.sh\" run \"${_conf_name}\"" "${hook}" 2>/dev/null; then
       warn "DRIFT: hook does not route to adamas run ${_conf_name}"
       ((fails++)) || true
     fi
@@ -34,26 +34,19 @@ adamas_verify() {
     local ddir
     ddir="$(_desktop_dir)"
     local desktop="${ddir}/${APP_ID}.desktop"
-    local escaped_dir
-    escaped_dir="$(_bre_escape "$_dir")"
-    if [[ -f "$desktop" ]]; then
-      if ! grep -q "^Exec=\"\\?${escaped_dir}/adamas\\.sh\"\\? run ${_conf_name}\( \|$\)" "$desktop" 2>/dev/null; then
-        warn "DRIFT: ${APP_ID}.desktop not routed through adamas run"
+    if [[ -f "${desktop}" ]]; then
+      local reason
+      while IFS= read -r reason; do
+        [[ -n "${reason}" ]] || continue
+        warn "DRIFT: ${APP_ID}.desktop ${reason}"
         ((fails++)) || true
-      fi
-      # check all Exec= lines for bare flatpak (Desktop Actions too)
-      local bare_count=0
-      bare_count=$(grep -c "^Exec=.*flatpak " "$desktop" 2>/dev/null) || true
-      if (( bare_count > 0 )); then
-        warn "DRIFT: ${APP_ID}.desktop has $bare_count unpatched Exec= line(s) with bare flatpak run"
-        ((fails += bare_count)) || true
-      fi
+      done <<< "$(_desktop_drift "${desktop}" "${_conf_name}")"
     else
-      warn "DRIFT: ${APP_ID}.desktop not found in $ddir"
+      warn "DRIFT: ${APP_ID}.desktop not found in ${ddir}"
       ((fails++)) || true
     fi
   fi
 
-  (( fails == 0 )) || die "$fails drift(s) detected - run adamas harden $_conf_name"
+  (( fails == 0 )) || die "${fails} drift(s) detected - run adamas harden ${_conf_name}"
   ok "${_conf_name} clean"
 }

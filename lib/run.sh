@@ -6,7 +6,7 @@
 # the permission store is keyed by APP_ID, so instances of the same app cannot
 # hold different portal policies at the same time.
 # state lines: "<pid><TAB><config><TAB><shared><TAB><portal grants>"
-_portal_state() { echo "${XDG_RUNTIME_DIR:-/tmp}/adamas-${APP_ID}.pids"; }
+_portal_state() { echo "${XDG_RUNTIME_DIR}/adamas-${APP_ID}.pids"; }
 
 _portal_sig() {
   local -a entries=() sorted=()
@@ -25,7 +25,7 @@ _portal_grants() {
   local -a granted=()
   local token
   for token in $1; do
-    [[ "$token" == yes:* ]] && granted+=("${token#yes:}")
+    [[ "${token}" == yes:* ]] && granted+=("${token#yes:}")
   done
   printf '%s' "${granted[*]-}"
 }
@@ -35,14 +35,14 @@ _portal_prune() {
   local pf pid conf share sig live=""
   pf="$(_portal_state)"
   while IFS=$'\t' read -r pid conf share sig; do
-    [[ -n "$pid" ]] || continue
-    kill -0 "$pid" 2>/dev/null || continue
+    [[ -n "${pid}" ]] || continue
+    kill -0 "${pid}" 2>/dev/null || continue
     live+="${pid}"$'\t'"${conf}"$'\t'"${share}"$'\t'"${sig}"$'\n'
     # redirections apply left to right - stderr must be silenced before the
     # input redirect, or the first run reports the missing state file
-  done 2>/dev/null < "$pf"
-  printf '%s' "$live" > "$pf"
-  printf '%s' "$live"
+  done 2>/dev/null < "${pf}"
+  printf '%s' "${live}" > "${pf}"
+  printf '%s' "${live}"
 }
 
 # store policy for one app id: the union of every live instance's ALLOW_PORTAL,
@@ -52,29 +52,29 @@ _portal_apply() {
   local -a tokens=() allow=() deny=()
   pf="$(_portal_state)"
   while IFS=$'\t' read -r pid conf share sig; do
-    [[ -n "$pid" ]] || continue
-    for token in $sig; do tokens+=("$token"); done
-  done 2>/dev/null < "$pf"
+    [[ -n "${pid}" ]] || continue
+    for token in ${sig}; do tokens+=("${token}"); done
+  done 2>/dev/null < "${pf}"
 
   for token in ${tokens[@]+"${tokens[@]}"}; do
-    [[ "$token" == yes:* ]] && yes+=" ${token#yes:}"
+    [[ "${token}" == yes:* ]] && yes+=" ${token#yes:}"
   done
   for token in ${tokens[@]+"${tokens[@]}"}; do
     key="${token#*:}"
-    [[ " $seen " == *" $key "* ]] && continue
-    seen+=" $key"
-    if [[ " $yes " == *" $key "* ]]; then allow+=("$key"); else deny+=("$key"); fi
+    [[ " ${seen} " == *" ${key} "* ]] && continue
+    seen+=" ${key}"
+    if [[ " ${yes} " == *" ${key} "* ]]; then allow+=("${key}"); else deny+=("${key}"); fi
   done
 
-  flatpak permission-reset "$APP_ID" 2>/dev/null || return 1
+  flatpak permission-reset "${APP_ID}" 2>/dev/null || return 1
   local pe tbl id
   for pe in ${deny[@]+"${deny[@]}"}; do
     tbl="${pe%%:*}"; id="${pe#*:}"
-    flatpak permission-set "$tbl" "$id" "$APP_ID" no || return 1
+    flatpak permission-set "${tbl}" "${id}" "${APP_ID}" no || return 1
   done
   for pe in ${allow[@]+"${allow[@]}"}; do
     tbl="${pe%%:*}"; id="${pe#*:}"
-    flatpak permission-set "$tbl" "$id" "$APP_ID" yes || return 1
+    flatpak permission-set "${tbl}" "${id}" "${APP_ID}" yes || return 1
   done
 }
 
@@ -84,31 +84,32 @@ _portal_cleanup() {
   local pf fd live held=true
   pf="$(_portal_state)"
   if [[ -n "${_PORTAL_LOCK_FD:-}" ]]; then
-    fd="$_PORTAL_LOCK_FD"
+    fd="${_PORTAL_LOCK_FD}"
   else
     held=false
     exec {fd}>"${pf}.lock"
-    flock "$fd"
+    flock "${fd}"
   fi
   # grep exits 1 when the last line is dropped - that is the normal last-instance
   # case, not a failure, so the rewrite must not depend on its status
-  { grep -v "^$$"$'\t' "$pf" 2>/dev/null || true; } > "${pf}.tmp"
-  mv -f "${pf}.tmp" "$pf"
+  { grep -v "^$$"$'\t' "${pf}" 2>/dev/null || true; } > "${pf}.tmp"
+  mv -f "${pf}.tmp" "${pf}"
   live="$(_portal_prune)"
-  if [[ -z "$live" ]]; then
-    rm -f "$pf"
-    flatpak permission-reset "$APP_ID" 2>/dev/null \
+  if [[ -z "${live}" ]]; then
+    rm -f "${pf}"
+    flatpak permission-reset "${APP_ID}" 2>/dev/null \
       || warn "permission-reset failed on exit - portal grants may be stale"
   else
     _portal_apply || warn "portal policy downgrade failed - grants may be stale"
   fi
-  $held || flock -u "$fd"
+  ${held} || flock -u "${fd}"
 }
 
 # --- run (stateless sandbox) ---
 adamas_run() {
   _require_safe_flatpak
-  _is_installed "$APP_ID" || die "$APP_ID not installed"
+  _require_runtime_dir
+  _is_installed "${APP_ID}" || die "${APP_ID} not installed"
 
   if [[ ${#ALLOW_DBUS_CALL[@]} -gt 0 ]] && ! _has_dbus_call; then
     die "ALLOW_DBUS_CALL needs a flatpak with --dbus-call (fork: q1sh101/flatpak, branch add-dbus-call-option) - drop it or use NEED_PORTAL=true"
@@ -120,26 +121,26 @@ adamas_run() {
   _sig="$(_portal_sig)"
   # hold the lock until the policy is in place - a sibling must not start earlier
   exec {_lock_fd}>"${_pf}.lock"
-  flock "$_lock_fd"
+  flock "${_lock_fd}"
   _live="$(_portal_prune)"
 
   # a shared ceiling needs both sides to have asked for it
   while IFS=$'\t' read -r _pid _conf _pshare _psig; do
-    [[ -n "$_pid" ]] || continue
-    [[ "$_psig" == "$_sig" ]] && continue
-    [[ "$_pshare" == "true" && "$SHARE_PORTAL" == "true" ]] && continue
-    _running="$(_portal_grants "$_psig")"
-    _wanted="$(_portal_grants "$_sig")"
-    die "$APP_ID is running as '$_conf' with portal grants [${_running:-none}]; '$_conf_name' needs [${_wanted:-none}] - the permission store is shared per app id, so close it first, give this config its own APP_ID, or set SHARE_PORTAL=true on both"
-  done <<< "$_live"
+    [[ -n "${_pid}" ]] || continue
+    [[ "${_psig}" == "${_sig}" ]] && continue
+    [[ "${_pshare}" == "true" && "${SHARE_PORTAL}" == "true" ]] && continue
+    _running="$(_portal_grants "${_psig}")"
+    _wanted="$(_portal_grants "${_sig}")"
+    die "${APP_ID} is running as '${_conf}' with portal grants [${_running:-none}]; '${_conf_name}' needs [${_wanted:-none}] - the permission store is shared per app id, so close it first, give this config its own APP_ID, or set SHARE_PORTAL=true on both"
+  done <<< "${_live}"
 
-  printf '%s\t%s\t%s\t%s\n' "$$" "$_conf_name" "$SHARE_PORTAL" "$_sig" >> "$_pf"
-  _PORTAL_LOCK_FD="$_lock_fd"
+  printf '%s\t%s\t%s\t%s\n' "$$" "${_conf_name}" "${SHARE_PORTAL}" "${_sig}" >> "${_pf}"
+  _PORTAL_LOCK_FD="${_lock_fd}"
   trap '_portal_cleanup' EXIT
 
   _portal_apply \
     || die "portal policy write failed - refusing to launch with unknown portal grants"
-  flock -u "$_lock_fd"
+  flock -u "${_lock_fd}"
   exec {_lock_fd}>&-
   unset _PORTAL_LOCK_FD
 
@@ -148,7 +149,7 @@ adamas_run() {
   local item
   # --file-forwarding only matters for @@-style args (patched .desktop entries)
   for item in ${APP_ARGS[@]+"${APP_ARGS[@]}"} "$@"; do
-    [[ "$item" == *@@* ]] && { flags+=(--file-forwarding); break; }
+    [[ "${item}" == *@@* ]] && { flags+=(--file-forwarding); break; }
   done
   for item in ${ALLOW_SHARE[@]+"${ALLOW_SHARE[@]}"}; do
     flags+=("--share=${item}")
@@ -214,6 +215,6 @@ adamas_run() {
   ulimit -c 0  # no core dumps to disk
 
   local rc=0
-  env -i "${env[@]}" flatpak run "${flags[@]}" "$APP_ID" ${APP_ARGS[@]+"${APP_ARGS[@]}"} "$@" || rc=$?
-  exit "$rc"
+  env -i "${env[@]}" flatpak run "${flags[@]}" "${APP_ID}" ${APP_ARGS[@]+"${APP_ARGS[@]}"} "$@" || rc=$?
+  exit "${rc}"
 }

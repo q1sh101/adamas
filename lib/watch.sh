@@ -10,7 +10,7 @@ adamas_watch_install() {
   local udir
   udir="$(_unit_dir)"
   local exe="${_dir}/adamas.sh"
-  mkdir -p "$udir" || die "cannot create $udir"
+  mkdir -p "${udir}" || die "cannot create ${udir}"
 
   # service: runs adamas auto
   cat > "${udir}/adamas-auto.service" <<EOF
@@ -24,18 +24,19 @@ EOF
 
   # path: instant reaction to new installs (all flatpak installations)
   local path_unit="${udir}/adamas-watch.path"
+  _export_dirs
   {
     echo "[Unit]"
     echo "Description=Watch for new Flatpak app installs"
     echo ""
     echo "[Path]"
     local edir
-    while IFS= read -r edir; do
+    for edir in "${_EXPORT_DIRS[@]}"; do
       echo "PathChanged=${edir}"
-    done < <(_list_export_dirs)
+    done
     echo "Unit=adamas-auto.service"
-  } > "$path_unit"
-  cat >> "$path_unit" <<EOF
+  } > "${path_unit}"
+  cat >> "${path_unit}" <<EOF
 
 [Install]
 WantedBy=default.target

@@ -118,10 +118,13 @@ What happens inside `adamas run <app>`:
   └──────────────┴──────────────┴──────────────┴──────────────┘
 ```
 
-Steps 1-3 run under a per-`APP_ID` lock, so a second launch of the same app
-waits until the policy is fully written before its own process starts. With a
-sibling alive the store is rewritten to the union of both, or the launch is
-refused - see [portal access](#portal-access).
+The deny-set only gates portals; `ALLOW_SOCKET=(pulseaudio)` still grants the
+microphone.
+
+The store writes in steps 1-3 run under a per-`APP_ID` lock, so a second launch
+of the same app waits until the policy is fully written before its own process
+starts. With a sibling alive the store is rewritten to the union of both, or the
+launch is refused - see [portal access](#portal-access).
 
 ## portal access
 
@@ -277,6 +280,10 @@ How app launches get intercepted so they always go through adamas:
 must exec this `adamas.sh`, the hook must call `run "<conf>"` with the same
 absolute path. Anything else is reported as drift.
 
+`harden` drops `DBusActivatable=true` from the patched `.desktop`: with it,
+launchers start the app over D-Bus and never read `Exec=`. Direct D-Bus name
+activation through the app's exported service file stays outside the route.
+
 `AUTO_SKIP=true` marks a config whose launch route is owned by something else -
 `auto` leaves it alone and `verify` reports it as unmanaged instead of drift.
 
@@ -324,6 +331,7 @@ NEED_PORTAL=true
   │   portals                 NEED_PORTAL                             │
   │                           ALLOW_PORTAL / DENY_PORTAL              │
   │                           ALLOW_DBUS_CALL (patched flatpak)       │
+  │                           SHARE_PORTAL                            │
   │                                                                   │
   │   persistence             PERSIST                                 │
   │                                                                   │
@@ -464,6 +472,7 @@ bash adamas.sh trace org.mozilla.firefox --runtime --save
   trace notes:
   ┌───────────────────────────────────────────────────────────────┐
   │   - output is a draft -- review before using                  │
+  │   - a saved draft has AUTO_SKIP=true until you review it      │
   │   - runtime mode runs the app WITHOUT the sandbox             │
   │   - runtime mode is mainly for portal / D-Bus call discovery  │
   │   - env needs are not inferred (add ALLOW_ENV manually)       │
@@ -528,11 +537,12 @@ are skipped, not failed.
   │   │   ├── auto.sh               auto-harden all apps              │
   │   │   ├── watch.sh              systemd path + timer              │
   │   │   └── trace.sh              draft config generation           │
-  │   └── apps/                                                       │
-  │       ├── example.conf          template                          │
-  │       ├── firefox.conf          per-app config                    │
-  │       └── webapps/              optional grouping (one level)     │
-  │           └── firefox-*.conf    browser-backed webapp configs     │
+  │   ├── apps/                                                       │
+  │   │   ├── example.conf          template                          │
+  │   │   ├── firefox.conf          per-app config                    │
+  │   │   └── webapps/              optional grouping (one level)     │
+  │   │       └── firefox-*.conf    browser-backed webapp configs     │
+  │   └── tests/smoke.sh            behavioral checks (stub flatpak)  │
   │                                                                   │
   └───────────────────────────────────────────────────────────────────┘
 ```

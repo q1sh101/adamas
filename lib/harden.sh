@@ -7,54 +7,59 @@ _install_hook() {
   local hook_name="$1"
   local hook="${HOOK_DIR}/${hook_name}"
 
-  mkdir -p "$HOOK_DIR" || die "cannot create $HOOK_DIR"
+  mkdir -p "${HOOK_DIR}" || die "cannot create ${HOOK_DIR}"
 
-  cat > "$hook" <<HOOK
-#!/bin/sh
-exec "${_dir}/adamas.sh" run "${_conf_name}" "\$@"
-HOOK
-  chmod +x "$hook" || die "cannot chmod $hook"
-  ok "hook installed: $hook"
+  # temp + rename (never writes through a symlinked hook)
+  local tmp
+  tmp="$(mktemp "${HOOK_DIR}/.${hook_name}.XXXXXX")" || die "cannot write in ${HOOK_DIR}"
+  # shellcheck disable=SC2016  # $@ expands in the hook
+  printf '#!/bin/sh\nexec "%s/adamas.sh" run "%s" "$@"\n' "${_dir}" "${_conf_name}" > "${tmp}" \
+    && chmod 755 "${tmp}" && mv -fT "${tmp}" "${hook}" \
+    || { rm -f "${tmp}"; die "cannot install ${hook}"; }
+  ok "hook installed: ${hook}"
 }
 
 # --- harden (.desktop patch or launcher hook) ---
 adamas_harden() {
   _require_safe_flatpak
-  _is_installed "$APP_ID" || die "$APP_ID not installed"
+  _is_installed "${APP_ID}" || die "${APP_ID} not installed"
 
   log "hardening ${_conf_name}..."
 
   if [[ -n "${HOOK_NAME:-}" ]]; then
     # webapp: install launcher hook (survives .desktop overwrites)
-    _install_hook "$HOOK_NAME"
+    _install_hook "${HOOK_NAME}"
   else
     # flatpak app: patch .desktop directly
     local dest_dir dest=""
     dest_dir="$(_desktop_dir)"
-    mkdir -p "$dest_dir" || die "cannot create $dest_dir"
+    mkdir -p "${dest_dir}" || die "cannot create ${dest_dir}"
 
     local src_desktop="" d
-    while IFS= read -r d; do
+    _export_dirs
+    for d in "${_EXPORT_DIRS[@]}"; do
       [[ -f "${d}/${APP_ID}.desktop" ]] && { src_desktop="${d}/${APP_ID}.desktop"; break; }
-    done < <(_list_export_dirs)
-    [[ -n "$src_desktop" ]] || die "no .desktop found for $APP_ID"
+    done
+    [[ -n "${src_desktop}" ]] || die "no .desktop found for ${APP_ID}"
     dest="${dest_dir}/${APP_ID}.desktop"
-    cp "$src_desktop" "$dest" || die "cannot copy .desktop for $APP_ID"
 
-    local escaped_dir sed_dir bre_app_id
-    escaped_dir="$(_bre_escape "$_dir")"
-    sed_dir="$(_sed_repl_escape "$_dir")"
-    bre_app_id="$(_bre_escape "$APP_ID")"
+    local sed_dir bre_app_id tmp drift
+    sed_dir="$(_sed_repl_escape "${_dir}")"
+    bre_app_id="$(_bre_escape "${APP_ID}")"
 
-    # patch all Exec= lines (main + Desktop Actions, preserves trailing args)
-    sed -i "s|^Exec=.*${bre_app_id}\(.*\)|Exec=\"${sed_dir}/adamas.sh\" run ${_conf_name}\1|" "$dest"
-
-    if ! grep -q "^Exec=\"${escaped_dir}/adamas\\.sh\" run ${_conf_name}" "$dest" 2>/dev/null; then
-      die "${APP_ID}.desktop: no Exec lines matched"
+    tmp="$(mktemp "${dest_dir}/.${APP_ID}.XXXXXX")" || die "cannot write in ${dest_dir}"
+    # patch a temp copy: "flatpak run [--opts] <app id>" in every Exec= line (main +
+    # Desktop Actions, keeps trailing args), drop DBusActivatable, then check the route
+    sed -e "s|^Exec=[^ ]*flatpak run\( --[^ ]*\)* ${bre_app_id}\( .*\)\?$|Exec=\"${sed_dir}/adamas.sh\" run ${_conf_name}\2|" \
+      -e '/^[[:space:]]*DBusActivatable[[:space:]]*=/d' \
+      "${src_desktop}" > "${tmp}" || { rm -f "${tmp}"; die "cannot patch .desktop for ${APP_ID}"; }
+    drift="$(_desktop_drift "${tmp}" "${_conf_name}")"
+    if [[ -n "${drift}" ]]; then
+      rm -f "${tmp}"
+      die "${APP_ID}.desktop ${drift//$'\n'/, }"
     fi
-    if grep -q "^Exec=.*flatpak " "$dest" 2>/dev/null; then
-      die "${APP_ID}.desktop: unpatched Exec= lines with bare flatpak run remain"
-    fi
+    { chmod 644 "${tmp}" && mv -fT "${tmp}" "${dest}"; } \
+      || { rm -f "${tmp}"; die "cannot install ${APP_ID}.desktop"; }
     ok "${_conf_name} hardened (all Exec= lines patched)"
   fi
 }

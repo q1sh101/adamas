@@ -28,7 +28,7 @@ _require_safe_flatpak() {
   _require_flatpak
   local ver major minor patch
   ver="$(flatpak --version | awk '{print $2}')"
-  IFS='.' read -r major minor patch <<< "$ver"
+  IFS='.' read -r major minor patch <<< "${ver}"
   major="${major%%[!0-9]*}"
   minor="${minor%%[!0-9]*}"
   minor="${minor:-0}"
@@ -42,10 +42,10 @@ _require_safe_flatpak() {
   elif (( major == 1 && minor == 14 && patch >= 10 ));  then safe=true
   fi
 
-  if ! $safe; then
+  if ! ${safe}; then
     local min="1.14.10"
     (( major == 1 && minor == 15 )) && min="1.15.10"
-    die "flatpak $ver is below required safe baseline - upgrade to >= $min"
+    die "flatpak ${ver} is below required safe baseline - upgrade to >= ${min}"
   fi
 }
 
@@ -63,14 +63,34 @@ _desktop_dir() {
 
 _unit_dir() { echo "${XDG_CONFIG_HOME:-${HOME}/.config}/systemd/user"; }
 
-# all flatpak .desktop export dirs (user + system + custom installations)
-_list_export_dirs() {
-  echo "${FLATPAK_USER_DIR:-${XDG_DATA_HOME:-${HOME}/.local/share}/flatpak}/exports/share/applications"
-  local dir
+# all flatpak .desktop export dirs (user + system + custom installations) in _EXPORT_DIRS
+# not a subshell helper: an unreadable installation list must kill the caller
+_export_dirs() {
+  local installs dir
+  installs="$(flatpak --installations)" || die "cannot list flatpak installations"
+  _EXPORT_DIRS=("${FLATPAK_USER_DIR:-${XDG_DATA_HOME:-${HOME}/.local/share}/flatpak}/exports/share/applications")
   while IFS= read -r dir; do
-    [[ -n "$dir" ]] || continue
-    echo "${dir}/exports/share/applications"
-  done < <(flatpak --installations 2>/dev/null)
+    [[ -n "${dir}" ]] || continue
+    _EXPORT_DIRS+=("${dir}/exports/share/applications")
+  done <<< "${installs}"
+}
+
+# route problems of a .desktop, one per line - empty means routed through adamas
+_desktop_drift() {
+  local desktop="$1" conf_name="$2" escaped_dir bare
+  escaped_dir="$(_bre_escape "${_dir}")"
+  grep -q "^Exec=\"\\?${escaped_dir}/adamas\\.sh\"\\? run ${conf_name}\( \|$\)" "${desktop}" 2>/dev/null \
+    || echo "not routed through adamas run"
+  # launchers start a DBusActivatable app over D-Bus and never read Exec=
+  ! grep -q "^[[:space:]]*DBusActivatable[[:space:]]*=" "${desktop}" 2>/dev/null \
+    || echo "is D-Bus activated - launches skip Exec="
+  bare=$(grep -c "^Exec=.*flatpak " "${desktop}" 2>/dev/null) || true
+  (( bare == 0 )) || echo "has ${bare} unpatched Exec= line(s) with bare flatpak run"
+}
+
+# portal state and locks must not fall back to a shared /tmp
+_require_runtime_dir() {
+  [[ -n "${XDG_RUNTIME_DIR:-}" ]] || die "XDG_RUNTIME_DIR not set"
 }
 
 # --- config lookup ---
@@ -80,10 +100,10 @@ _list_export_dirs() {
 _list_confs() {
   local f d
   for f in "${_dir}/apps"/*.conf "${_dir}/apps"/*/*.conf; do
-    [[ -f "$f" && ! -L "$f" ]] || continue
-    d="$(dirname "$f")"
-    [[ ! -L "$d" ]] || continue
-    printf '%s\n' "$f"
+    [[ -f "${f}" && ! -L "${f}" ]] || continue
+    d="$(dirname "${f}")"
+    [[ ! -L "${d}" ]] || continue
+    printf '%s\n' "${f}"
   done | LC_ALL=C sort
 }
 
@@ -93,7 +113,7 @@ _conf_path() {
   local name="$1" f
   local -a found=()
   while IFS= read -r f; do
-    [[ "$(basename "$f")" == "${name}.conf" ]] && found+=("$f")
+    [[ "$(basename "${f}")" == "${name}.conf" ]] && found+=("${f}")
   done < <(_list_confs)
 
   case ${#found[@]} in
@@ -103,61 +123,72 @@ _conf_path() {
   esac
 }
 
+# new config name in _DRAFT_NAME: last id segment, or the dashed id when taken
+# not a subshell helper: a duplicate must kill the caller, like _conf_path
+_draft_name() {
+  local app_id="$1"
+  _DRAFT_NAME="${app_id##*.}"
+  _DRAFT_NAME="${_DRAFT_NAME,,}"
+  if _conf_path "${_DRAFT_NAME}"; then
+    _DRAFT_NAME="${app_id//./-}"
+  fi
+}
+
 # --- regex ---
 _bre_escape() {
   local s="${1//\\/\\\\}"
   s="${s//./\\.}"; s="${s//\[/\\[}"; s="${s//\]/\\]}"
   s="${s//\*/\\*}"; s="${s//\^/\\^}"; s="${s//\$/\\$}"
-  printf '%s' "$s"
+  printf '%s' "${s}"
 }
 
 # escape string for sed replacement (delimiter |)
 _sed_repl_escape() {
   local s="${1//\\/\\\\}"
   s="${s//&/\\&}"; s="${s//|/\\|}"
-  printf '%s' "$s"
+  printf '%s' "${s}"
 }
 
 # --- validation ---
 _validate_enum() {
   local name="$1" valid="$2"
-  local -n _arr="$name"
+  local -n _arr="${name}"
   local item
   for item in ${_arr[@]+"${_arr[@]}"}; do
     [[ ";${valid};" == *";${item};"* ]] \
-      || die "invalid $name: $item (valid: $valid)"
+      || die "invalid ${name}: ${item} (valid: ${valid})"
   done
 }
 
 _validate_fmt() {
   local name="$1" pattern="$2" hint="$3"
-  local -n _arr="$name"
+  local -n _arr="${name}"
   local item
   for item in ${_arr[@]+"${_arr[@]}"}; do
-    [[ "$item" =~ $pattern ]] \
-      || die "invalid $name format: $item (expected: $hint)"
+    [[ "${item}" =~ ${pattern} ]] \
+      || die "invalid ${name} format: ${item} (expected: ${hint})"
   done
 }
 
 # --- config safety (defense-in-depth before source) ---
 _check_conf_safe() {
   local conf="$1"
-  [[ ! -L "$conf" ]]            || die "config is a symlink: $conf"
-  local owner; owner="$(stat -c '%u' "$conf")" || die "cannot stat $conf"
-  [[ "$owner" == "$(id -u)" ]]  || die "config not owned by current user: $conf"
-  local perms; perms="$(stat -c '%a' "$conf")" || die "cannot stat $conf"
+  [[ ! -L "${conf}" ]]            || die "config is a symlink: ${conf}"
+  local owner; owner="$(stat -c '%u' "${conf}")" || die "cannot stat ${conf}"
+  [[ "${owner}" == "$(id -u)" ]]  || die "config not owned by current user: ${conf}"
+  local perms; perms="$(stat -c '%a' "${conf}")" || die "cannot stat ${conf}"
   [[ ! "${perms: -2:1}" =~ [2367] && ! "${perms: -1}" =~ [2367] ]] \
-    || die "config is group/world-writable ($perms): $conf"
+    || die "config is group/world-writable (${perms}): ${conf}"
 }
 
 _check_conflict() {
   local a_name="$1" b_name="$2"
-  local -n _a="$a_name" _b="$b_name"
+  local -n _a="${a_name}" _b="${b_name}"
   local x y
   for x in ${_a[@]+"${_a[@]}"}; do
     for y in ${_b[@]+"${_b[@]}"}; do
-      [[ "$x" != "$y" ]] \
-        || die "conflict: $x in both $a_name and $b_name"
+      [[ "${x}" != "${y}" ]] \
+        || die "conflict: ${x} in both ${a_name} and ${b_name}"
     done
   done
 }
@@ -170,28 +201,38 @@ _validate() {
   # session-bus/system-bus hand the app an unfiltered bus - that is a sandbox escape
   local _sock
   for _sock in ${ALLOW_SOCKET[@]+"${ALLOW_SOCKET[@]}"}; do
-    [[ "$_sock" != "session-bus" && "$_sock" != "system-bus" ]] \
-      || die "ALLOW_SOCKET: '$_sock' grants unfiltered bus access (sandbox escape) - use NEED_PORTAL=true"
+    [[ "${_sock}" != "session-bus" && "${_sock}" != "system-bus" ]] \
+      || die "ALLOW_SOCKET: '${_sock}' grants unfiltered bus access (sandbox escape) - use NEED_PORTAL=true"
   done
   _validate_enum ALLOW_SOCKET  "x11;wayland;fallback-x11;pulseaudio;ssh-auth;pcsc;cups;gpg-agent;inherit-wayland-socket"
   _validate_enum ALLOW_DEVICE  "dri;input;usb;kvm;shm;all"
   _validate_enum ALLOW_FEATURE "devel;multiarch;bluetooth;canbus;per-app-dev-shm"
 
   local dbus='^[a-zA-Z_][a-zA-Z0-9_.-]*(\.\*)?$'
-  _validate_fmt ALLOW_DBUS_TALK        "$dbus" "D-Bus name (org.example.Name)"
-  _validate_fmt ALLOW_DBUS_OWN         "$dbus" "D-Bus name (org.example.Name)"
-  _validate_fmt ALLOW_SYSTEM_DBUS_TALK "$dbus" "D-Bus name (org.example.Name)"
-  _validate_fmt ALLOW_SYSTEM_DBUS_OWN  "$dbus" "D-Bus name (org.example.Name)"
-  _validate_fmt ALLOW_A11Y_OWN         "$dbus" "D-Bus name (org.example.Name)"
+  _validate_fmt ALLOW_DBUS_TALK        "${dbus}" "D-Bus name (org.example.Name)"
+  _validate_fmt ALLOW_DBUS_OWN         "${dbus}" "D-Bus name (org.example.Name)"
+  _validate_fmt ALLOW_SYSTEM_DBUS_TALK "${dbus}" "D-Bus name (org.example.Name)"
+  _validate_fmt ALLOW_SYSTEM_DBUS_OWN  "${dbus}" "D-Bus name (org.example.Name)"
+  _validate_fmt ALLOW_A11Y_OWN         "${dbus}" "D-Bus name (org.example.Name)"
   _validate_fmt ALLOW_FILESYSTEM '^[a-zA-Z~/][a-zA-Z0-9_./-]*(:(ro|rw|create))?$' \
     "path or xdg-name[:ro|rw|create]"
   # block overly broad filesystem access
   local _fs
   for _fs in ${ALLOW_FILESYSTEM[@]+"${ALLOW_FILESYSTEM[@]}"}; do
-    local _fp="${_fs%%:*}"
-    [[ "$_fp" != "/" && "$_fp" != "~" && "$_fp" != "home" && "$_fp" != "host" ]] \
-      || die "ALLOW_FILESYSTEM: '$_fp' is too broad"
-    [[ "$_fp" != *".."* ]] || die "ALLOW_FILESYSTEM: path traversal in '$_fs'"
+    local _fp="${_fs%%:*}" _root
+    # normalize like flatpak (// and /./ collapse, trailing / and /. drop)
+    _root="${_fp}"
+    [[ "${_root}" != "~"* ]] || _root="${HOME%/}/${_root:1}"
+    while [[ "${_root}" == *//* || "${_root}" == */./* ]]; do
+      _root="${_root//\/\//\/}"; _root="${_root//\/.\//\/}"
+    done
+    while [[ "${_root}" == */ || "${_root}" == */. ]]; do
+      _root="${_root%/}"; _root="${_root%/.}"
+    done
+    case "${_root}" in
+      ""|home|host|/home|"${HOME%/}") die "ALLOW_FILESYSTEM: '${_fp}' is too broad" ;;
+    esac
+    [[ "${_fp}" != *".."* ]] || die "ALLOW_FILESYSTEM: path traversal in '${_fs}'"
   done
 
   # allow single dot for full-home persist
@@ -206,19 +247,19 @@ _validate() {
   local _ev
   for _ev in ${ALLOW_ENV[@]+"${ALLOW_ENV[@]}"}; do
     [[ ";${_env_blocked};" != *";${_ev};"* ]] \
-      || die "ALLOW_ENV: '$_ev' is blocked (security-sensitive)"
+      || die "ALLOW_ENV: '${_ev}' is blocked (security-sensitive)"
   done
   for _ev in ${SET_ENV[@]+"${SET_ENV[@]}"}; do
     local _sv="${_ev%%=*}"
     [[ ";${_env_blocked};" != *";${_sv};"* ]] \
-      || die "SET_ENV: '$_sv' is blocked (security-sensitive)"
+      || die "SET_ENV: '${_sv}' is blocked (security-sensitive)"
   done
   _validate_fmt ALLOW_USB    '^(all|(vnd|dev|cls):[0-9a-fA-F*]+(:[0-9a-fA-F*]+)?(\+(vnd|dev|cls):[0-9a-fA-F*]+(:[0-9a-fA-F*]+)?)*)$' "all or query (vnd:XXXX+dev:YYYY, cls:XX:XX)"
   # flatpak: dev: requires vnd: in same query
   local u
   for u in ${ALLOW_USB[@]+"${ALLOW_USB[@]}"}; do
-    [[ "$u" != *dev:* || "$u" == *vnd:* ]] \
-      || die "invalid USB query: $u - dev: requires vnd:"
+    [[ "${u}" != *dev:* || "${u}" == *vnd:* ]] \
+      || die "invalid USB query: ${u} - dev: requires vnd:"
   done
   _validate_fmt DENY_PORTAL  '^[a-z][a-z0-9-]*:.+$'   "table:id"
   _validate_fmt ALLOW_PORTAL '^[a-z][a-z0-9-]*:.+$'    "table:id"
@@ -229,19 +270,19 @@ _validate() {
   _check_conflict DENY_PORTAL ALLOW_PORTAL
 
   # hook name: alphanumeric only (no path traversal)
-  [[ -z "${HOOK_NAME:-}" ]] || [[ "$HOOK_NAME" =~ ^[a-zA-Z0-9_-]+$ ]] \
-    || die "invalid HOOK_NAME: $HOOK_NAME"
+  [[ -z "${HOOK_NAME:-}" ]] || [[ "${HOOK_NAME}" =~ ^[a-zA-Z0-9_-]+$ ]] \
+    || die "invalid HOOK_NAME: ${HOOK_NAME}"
 
   # HOOK_DIR names the external launcher's hook directory - adamas has no default
   if [[ -n "${HOOK_NAME:-}" ]]; then
     [[ -n "${HOOK_DIR:-}" ]] || die "HOOK_NAME requires HOOK_DIR (launcher hook directory)"
-    [[ "$HOOK_DIR" == /* && "$HOOK_DIR" != *..* ]] \
-      || die "invalid HOOK_DIR: $HOOK_DIR (absolute path, no ..)"
+    [[ "${HOOK_DIR}" == /* && "${HOOK_DIR}" != *..* ]] \
+      || die "invalid HOOK_DIR: ${HOOK_DIR} (absolute path, no ..)"
   fi
 
   local _flag
   for _flag in NEED_PORTAL SHARE_PORTAL AUTO_SKIP; do
     [[ "${!_flag}" == "true" || "${!_flag}" == "false" ]] \
-      || die "$_flag must be true or false (got: ${!_flag})"
+      || die "${_flag} must be true or false (got: ${!_flag})"
   done
 }

@@ -46,20 +46,20 @@ _defaults() {
 
 _load_conf() {
   local app="$1"
-  case "$app" in
-    ''|*[!a-zA-Z0-9._-]*) die "invalid app name: $app" ;;
+  case "${app}" in
+    ''|*[!a-zA-Z0-9._-]*) die "invalid app name: ${app}" ;;
   esac
   local conf
-  _conf_path "$app" || die "no config: ${_dir}/apps/${app}.conf"
-  conf="$_CONF_PATH"
+  _conf_path "${app}" || die "no config: ${_dir}/apps/${app}.conf"
+  conf="${_CONF_PATH}"
 
-  _conf_name="$app"
+  _conf_name="${app}"
   _defaults
-  _check_conf_safe "$conf"
+  _check_conf_safe "${conf}"
   # shellcheck source=/dev/null
-  source "$conf"
+  source "${conf}"
 
-  [[ -n "$APP_ID" ]] || die "APP_ID not set in $conf"
+  [[ -n "${APP_ID}" ]] || die "APP_ID not set in ${conf}"
 
   # merge baseline portal denies (skip entries overridden per-app)
   local baseline=(
@@ -76,12 +76,12 @@ _load_conf() {
   for entry in "${baseline[@]}"; do
     skip=false
     for existing in ${DENY_PORTAL[@]+"${DENY_PORTAL[@]}"}; do
-      [[ "$entry" != "$existing" ]] || { skip=true; break; }
+      [[ "${entry}" != "${existing}" ]] || { skip=true; break; }
     done
     for existing in ${ALLOW_PORTAL[@]+"${ALLOW_PORTAL[@]}"}; do
-      [[ "$entry" != "$existing" ]] || { skip=true; break; }
+      [[ "${entry}" != "${existing}" ]] || { skip=true; break; }
     done
-    $skip || DENY_PORTAL+=("$entry")
+    ${skip} || DENY_PORTAL+=("${entry}")
   done
 
   _validate
@@ -90,35 +90,37 @@ _load_conf() {
 # --- dispatch ---
 cmd="${1:-}"
 
-case "$cmd" in
+case "${cmd}" in
   run)
     [[ -n "${2:-}" ]] || die "usage: adamas run <app> [args...]"
     _load_conf "$2"
-    logger -t adamas "run $_conf_name ($APP_ID)" 2>/dev/null || true
+    logger -t adamas "run ${_conf_name} (${APP_ID})" 2>/dev/null || true
     adamas_run "${@:3}"
     ;;
   install)
-    [[ -n "${2:-}" ]] || die "usage: adamas install <app>"
+    [[ -n "${2:-}" && $# -eq 2 ]] || die "usage: adamas install <app>"
     _load_conf "$2"
-    logger -t adamas "install $_conf_name ($APP_ID)" 2>/dev/null || true
+    logger -t adamas "install ${_conf_name} (${APP_ID})" 2>/dev/null || true
     adamas_install
     ;;
   harden)
-    [[ -n "${2:-}" ]] || die "usage: adamas harden <app>"
+    [[ -n "${2:-}" && $# -eq 2 ]] || die "usage: adamas harden <app>"
     _load_conf "$2"
-    logger -t adamas "harden $_conf_name ($APP_ID)" 2>/dev/null || true
+    logger -t adamas "harden ${_conf_name} (${APP_ID})" 2>/dev/null || true
     adamas_harden
     ;;
   verify)
-    [[ -n "${2:-}" ]] || die "usage: adamas verify <app>"
+    [[ -n "${2:-}" && $# -eq 2 ]] || die "usage: adamas verify <app>"
     _load_conf "$2"
-    logger -t adamas "verify $_conf_name ($APP_ID)" 2>/dev/null || true
+    logger -t adamas "verify ${_conf_name} (${APP_ID})" 2>/dev/null || true
     adamas_verify
     ;;
   auto)
+    [[ $# -le 1 ]] || die "auto takes no arguments"
     adamas_auto
     ;;
   watch)
+    [[ $# -le 2 ]] || die "usage: adamas watch <install|remove|status>"
     case "${2:-}" in
       install) adamas_watch_install ;;
       remove)  adamas_watch_remove ;;
@@ -131,20 +133,21 @@ case "$cmd" in
     adamas_trace "$2" "${@:3}"
     ;;
   list)
+    [[ $# -le 1 ]] || die "list takes no arguments"
     count=0
     while IFS= read -r f; do
-      [[ "$(basename "$f")" == "example.conf" ]] && continue
+      [[ "$(basename "${f}")" == "example.conf" ]] && continue
       log "  $(basename "${f%.conf}")"
       ((count++)) || true
     done < <(_list_confs)
-    (( count > 0 )) || warn "no app configs in $_dir/apps"
+    (( count > 0 )) || warn "no app configs in ${_dir}/apps"
     ;;
   *)
     log "usage: adamas <command> <app>"
     log "  run     <app>     launch with stateless sandbox (--sandbox + env -i)"
     log "  install <app>     install from Flathub"
-    log "  harden  <app>     patch .desktop to route through adamas run"
-    log "  verify  <app>     audit .desktop route integrity"
+    log "  harden  <app>     patch .desktop or install launcher hook"
+    log "  verify  <app>     audit route / hook integrity"
     log "  auto              scan + harden all flatpak apps"
     log "  watch   install   enable systemd auto-hardening"
     log "  watch   remove    disable systemd auto-hardening"
