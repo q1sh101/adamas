@@ -12,6 +12,7 @@ _install_hook() {
   # temp + rename (never writes through a symlinked hook)
   local tmp
   tmp="$(mktemp "${HOOK_DIR}/.${hook_name}.XXXXXX")" || die "cannot write in ${HOOK_DIR}"
+  [[ ! -L "${hook}" ]] || rm -f -- "${hook}" || { rm -f "${tmp}"; die "cannot remove symlinked ${hook}"; }
   # shellcheck disable=SC2016  # $@ expands in the hook
   printf '#!/bin/sh\nexec "%s/adamas.sh" run "%s" "$@"\n' "${_dir}" "${_conf_name}" > "${tmp}" \
     && chmod 755 "${tmp}" && mv -fT "${tmp}" "${hook}" \
@@ -58,6 +59,7 @@ adamas_harden() {
       rm -f "${tmp}"
       die "${APP_ID}.desktop ${drift//$'\n'/, }"
     fi
+    [[ ! -L "${dest}" ]] || rm -f -- "${dest}" || { rm -f "${tmp}"; die "cannot remove symlinked ${dest}"; }
     { chmod 644 "${tmp}" && mv -fT "${tmp}" "${dest}"; } \
       || { rm -f "${tmp}"; die "cannot install ${APP_ID}.desktop"; }
     ok "${_conf_name} hardened (all Exec= lines patched)"

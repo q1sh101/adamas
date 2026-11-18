@@ -299,6 +299,11 @@ _trace_runtime() {
   # static first - populates _T_* arrays
   _parse_metadata "${app_id}"
 
+  # a running instance takes over the launch and exits at once - nothing would be observed
+  if flatpak ps --columns=application 2>/dev/null | grep -Fxq -- "${app_id}"; then
+    die "${app_id} is already running - close it, then trace again"
+  fi
+
   # snapshot existing proxy PIDs
   local proxy_pids_before
   proxy_pids_before="$(pgrep xdg-dbus-proxy 2>/dev/null | sort)" || true
@@ -313,12 +318,13 @@ _trace_runtime() {
     > "${dbus_log}" 2>/dev/null &
   local monitor_pid=$!
 
-  # cleanup on exit: kill monitor, remove tmpfile
-  trap 'kill "${monitor_pid}" 2>/dev/null; rm -f "${dbus_log}"' EXIT
+  # cleanup on exit: kill monitor and the unsandboxed app, remove tmpfile
+  # (a background job ignores Ctrl+C, so the app would outlive the trace)
+  trap 'kill "${monitor_pid}" 2>/dev/null; flatpak kill "${app_id}" 2>/dev/null; rm -f "${dbus_log}"' EXIT
 
   # launch app (permissive - no --sandbox, uses manifest permissions)
   warn "runtime trace runs without sandbox" >&2
-  log "trace active - use the app, then close it or Ctrl+C" >&2
+  log "trace active - use the app, then close it (Ctrl+C aborts)" >&2
   flatpak run "${app_id}" &
   local app_pid=$!
 

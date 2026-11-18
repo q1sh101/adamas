@@ -101,4 +101,5 @@ to per-sandbox default-deny when that fork is installed.
 ## reference
 
 - [ARCHITECTURE.md](docs/ARCHITECTURE.md) - full system map.
+- [github.com/q1sh101/hifox](https://github.com/q1sh101/hifox) - optional Firefox hardening: adamas confines the Flatpak process outside, hifox hardens Firefox inside (provides the hooks `apps/firefox*.conf` route through).
 - [MIT License](LICENSE)
